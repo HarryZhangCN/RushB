@@ -158,7 +158,7 @@ INDEX_HTML = r'''<!doctype html>
           <section class="about-section">
             <h3>功能与数据处理</h3>
             <p>RushB 在本机运行，提供链接解析和下载界面，不提供视频上传、托管或对外分享服务。解析、账号校验和下载需要连接 B 站相关服务，实际可用画质取决于视频资源、账号权限及平台接口。</p>
-            <p>选择“从浏览器获取”时，扩展会将本次导入所需的 B 站登录 Cookie 经本机 127.0.0.1 一次性连接传给 RushB，再写入本机 Electron 登录会话。登录会话存放在 Windows 用户的 Bilidown 数据目录（%APPDATA%\bilidown），并与 Bilidown 共用。Cookie 可代表账号访问权限，请妥善保管设备和账号。</p>
+            <p>选择“从浏览器获取”时，扩展会将本次导入所需的 B 站登录 Cookie 经本机 127.0.0.1 一次性连接传给 RushB，再写入本机 Electron 登录会话。RushB 的登录会话存放在 Windows 用户的 RushB 数据目录（%APPDATA%\RushB），与 Bilidown 配置独立保存；本机登录数据不包含在源码仓库中。Cookie 可代表账号访问权限，请妥善保管设备和账号。</p>
           </section>
           <section class="about-section">
             <h3>内容权利与使用规范</h3>
@@ -272,7 +272,7 @@ def patch_asar() -> None:
         raise RuntimeError("Could not find the single-instance profile hook")
     background = background.replace(
         lock_marker,
-        'd=n(148);r.app.setPath("userData",c.join(r.app.getPath("appData"),"bilidown"));const m=r.app.requestSingleInstanceLock();',
+        'd=n(148);r.app.setPath("userData",c.join(r.app.getPath("appData"),"RushB"));const m=r.app.requestSingleInstanceLock();',
         1,
     )
     protocol_call = 'r.app.setAsDefaultProtocolClient("bilidown",process.execPath,t);'
@@ -356,7 +356,7 @@ RushB 提供批量链接下载、系列视频选择、最高可用音视频画�
 
 ## 使用
 
-1. 双击 `启动RushB.bat`。RushB 与 Bilidown 共用登录状态和设置；切换前先从 RushB 托盘菜单选择“退出”，并关闭 Bilidown，避免旧进程接管启动请求。
+1. 双击 `启动RushB.bat`。RushB 使用独立的 %APPDATA%\RushB 用户数据目录，与 Bilidown 登录状态和设置分开保存。
 2. 每行粘贴一个 B 站 BV 号、av 号或视频页链接。普通多 P 视频默认下载全部分 P；合集 / 系列会先弹出集数选择窗口，默认只勾选当前集，可多选或全选。带 `?p=` 的链接默认定位到指定集。
 3. 点击“一键下载”，所选任务会交给内置 aria2 和 ffmpeg 处理；弹窗中的“跳过此链接”可略过当前系列链接。
 4. 点击标题栏的小圆图标，可查看下载中、等待中、暂停任务的进度和速度、切换已下载记录、清理下载记录，并在面板顶部打开保存位置；清理记录不会删除本地视频文件。

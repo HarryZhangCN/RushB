@@ -30,7 +30,7 @@ The build writes to `dist\`. Set `RUSHB_OUTPUT` to choose another output directo
 
 ## Browser login bridge
 
-RushB reuses the local Bilidown user-data directory (`%APPDATA%\bilidown`) so an existing Bilidown login session is available on startup. Both applications share this profile. Before switching or applying an update, fully quit RushB from its tray menu and close Bilidown; otherwise the old process can receive the next launch request.
+RushB stores its Electron user data separately at `%APPDATA%\RushB`; it does not reuse the Bilidown profile. The source repository does not contain browser profiles, login cookies, account sessions, download history, or machine-specific settings.
 
 To import a separate Edge or Chrome session, load `browser-extension/` as an unpacked extension. In the browser selected as the system default, sign in to Bilibili. In RushB, open **Settings → From browser** and start the import. The extension transfers only the listed Bilibili login cookies through a one-time token to the local RushB process. The import is user-initiated each time.
 
