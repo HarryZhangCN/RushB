@@ -3,6 +3,12 @@
   "name": "RushB 浏览器登录桥接",
   "version": "1.0.0",
   "description": "将用户主动选择的 B 站登录状态发送到本机 RushB。",
+  "icons": {
+    "16": "icons/rushb-16.png",
+    "32": "icons/rushb-32.png",
+    "48": "icons/rushb-48.png",
+    "128": "icons/rushb-128.png"
+  },
   "permissions": ["cookies"],
   "host_permissions": [
     "https://bilibili.com/*",

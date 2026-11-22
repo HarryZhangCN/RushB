@@ -2187,3 +2187,59 @@ button:focus-visible,
 .series-secondary {
   border-radius: var(--control-radius);
 }
+
+/* Let the preserved Bilidown ElementUI dialogs sit above RushB's shell. */
+body > .el-dialog__wrapper,
+body > .el-message-box__wrapper {
+  z-index: 2147483500 !important;
+  pointer-events: auto !important;
+}
+
+body > .v-modal {
+  z-index: 2147483499 !important;
+  pointer-events: auto !important;
+}
+
+/* ElementUI can mount dialogs under #app or directly on body. */
+.el-dialog__wrapper,
+.el-message-box__wrapper {
+  z-index: 2147483500 !important;
+  pointer-events: auto !important;
+}
+
+.el-dialog__wrapper .el-dialog,
+.el-message-box__wrapper .el-message-box {
+  pointer-events: auto !important;
+}
+
+.v-modal {
+  z-index: 2147483499 !important;
+  pointer-events: auto !important;
+}
+
+
+/* Raise the hidden Vue root so ElementUI dialogs can escape its shell layer. */
+#app {
+  z-index: 2147483501 !important;
+}
+
+#app .el-dialog__wrapper,
+#app .el-message-box__wrapper,
+.el-dialog__wrapper,
+.el-message-box__wrapper {
+  z-index: 2147483502 !important;
+  pointer-events: auto !important;
+}
+
+#app .el-dialog__wrapper .el-dialog,
+#app .el-message-box__wrapper .el-message-box,
+.el-dialog__wrapper .el-dialog,
+.el-message-box__wrapper .el-message-box {
+  pointer-events: auto !important;
+}
+
+#app .v-modal,
+.v-modal {
+  z-index: 2147483501 !important;
+  pointer-events: auto !important;
+}

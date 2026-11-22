@@ -1,0 +1,86 @@
+#settings-view > .components-settings {
+  margin-top: 16px;
+}
+
+.components-heading,
+.components-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.components-heading h2,
+.components-name {
+  margin: 0;
+  color: var(--fluent-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.components-list {
+  list-style: none;
+  margin: 7px 0 0;
+  padding: 0;
+}
+
+.components-row {
+  padding: 9px 0;
+  border-top: 1px solid var(--fluent-stroke);
+}
+
+.components-row:last-child {
+  padding-bottom: 0;
+}
+
+.components-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.components-version,
+.components-detail,
+.components-status {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fluent-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.components-version {
+  font-variant-numeric: tabular-nums;
+}
+
+.components-detail[data-kind="available"] {
+  color: var(--fluent-accent);
+}
+
+.components-detail[data-kind="error"],
+.components-status[data-kind="error"] {
+  color: #ff9aaa;
+}
+
+.components-status {
+  margin: 10px 0 0;
+}
+
+.components-action {
+  min-height: 30px;
+  min-width: 46px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.components-action:focus-visible {
+  outline: 2px solid var(--fluent-accent);
+  outline-offset: 2px;
+}
+
+.components-action:disabled {
+  cursor: default;
+  opacity: .5;
+  background: transparent;
+  color: var(--fluent-text-secondary);
+}

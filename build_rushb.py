@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import shutil
 import struct
 from pathlib import Path
@@ -15,9 +17,26 @@ ASAR = SOURCE / "resources" / "app.asar" if SOURCE else None
 
 JS_SOURCE = PROJECT_ROOT / "src" / "rushb_ui.js"
 CSS_SOURCE = PROJECT_ROOT / "src" / "rushb_ui.css"
+ENGINE_SOURCE = PROJECT_ROOT / "src" / "rushb_engine.js"
+DOUYIN_SOURCE = PROJECT_ROOT / "src" / "rushb_douyin.js"
+YOUTUBE_SOURCE = PROJECT_ROOT / "src" / "rushb_youtube.js"
+YOUTUBE_TOOLS = os.environ.get("RUSHB_YOUTUBE_TOOLS")
+LINKS_SOURCE = PROJECT_ROOT / "src" / "rushb_links.js"
 EXTENSION_SOURCE = PROJECT_ROOT / "browser-extension"
 LAUNCHER_SOURCE = PROJECT_ROOT / "launcher"
 BACKDROP_SOURCE = LAUNCHER_SOURCE / "Set-RushBBackdrop.ps1"
+PUBLISHER_ID = "Harry张"
+WINDOWS_APP_ID = "RushB.VideoDownloader"
+BRANDING = PROJECT_ROOT / "branding"
+APP_ICON = BRANDING / "rushb.ico"
+APP_LOGO_PNG = BRANDING / "rushb-128.png"
+LEGACY_RENDERER = "assets/js/app.8ec346bd.js"
+COMPONENT_RESOURCES = {
+    "rushb-components.js": "rushb_components.js",
+    "rushb-components-bridge.js": "rushb_components_bridge.js",
+    "assets/js/rushb-components-ui.js": "rushb_components_ui.js",
+    "assets/css/rushb-components-ui.css": "rushb_components_ui.css",
+}
 
 
 INDEX_HTML = r'''<!doctype html>
@@ -30,10 +49,10 @@ INDEX_HTML = r'''<!doctype html>
   <title>RushB（B站视频下载器）</title>
   <link href="./assets/css/chunk-vendors.00d3c6de.css" rel="stylesheet">
   <link href="./assets/css/app.cfce7cff.css" rel="stylesheet">
-  <link href="./assets/css/rushb-ui.css" rel="stylesheet">
+  <link href="./assets/css/rushb-ui-dialog-fix.css" rel="stylesheet">
   <script defer src="./assets/js/chunk-vendors.6f104f4c.js"></script>
   <script defer src="./assets/js/app.8ec346bd.js"></script>
-  <script defer src="./assets/js/rushb-ui.js"></script>
+  <script defer src="./assets/js/rushb-ui-dialog-fix.js"></script>
 </head>
 <body>
   <div id="app"></div>
@@ -53,7 +72,7 @@ INDEX_HTML = r'''<!doctype html>
     </header>
     <main class="workbench">
       <section class="input-card">
-        <textarea id="batch-links" spellcheck="false" placeholder="粘贴 B 站视频链接，每行一个"></textarea>
+        <textarea id="batch-links" spellcheck="false" placeholder="粘贴 B 站、抖音或 YouTube 链接，也可粘贴分享文案"></textarea>
         <div class="input-meta">
           <span id="link-count">0 个链接</span>
         </div>
@@ -86,10 +105,11 @@ INDEX_HTML = r'''<!doctype html>
           </label>
         </div>
         <section id="browser-method" class="settings-card method-panel">
-          <p>请先在系统默认浏览器登录 B 站并加载随程序提供的扩展；点击下方按钮后会在该浏览器打开本地导入页。</p>
+          <p>在默认 Edge 或 Chrome 的当前配置中登录 B 站，并在扩展管理页加载 RushB 登录桥接。</p>
           <div class="settings-actions">
             <button id="browser-import" class="settings-primary">从浏览器获取登录状态</button>
             <button id="open-extension-folder" class="text-button">打开扩展目录</button>
+            <button id="browser-manual-login" class="text-button">直接扫码登录</button>
           </div>
           <div id="browser-import-status" class="method-status" role="status"></div>
         </section>
@@ -239,6 +259,77 @@ BRIDGE_MAIN = r'''function bilidownReplyAccount(sender,channel){const request=r.
 BACKDROP_READY = r'''E.once("ready-to-show",()=>{const fs=require("fs"),d=c.dirname(process.execPath),l=c.join(d,"backdrop-startup.log"),g=m=>{try{fs.appendFileSync(l,new Date().toISOString()+" "+m+"\r\n")}catch(t){}};E.show(),E.focus();try{const h=E.getNativeWindowHandle().toString("hex"),s=c.join(d,"Set-RushBBackdrop.ps1"),p=c.join(process.env.SystemRoot||"C:\\Windows","System32","WindowsPowerShell","v1.0","powershell.exe"),w=require("child_process").spawn(p,["-NoLogo","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",s,h],{windowsHide:!0,stdio:"ignore"});g("Electron="+(process.versions.electron||"unknown")+"; applying documented DWM Desktop Acrylic; HWND="+h);w.on("error",t=>g("DWM helper spawn error: "+t.message));w.on("close",t=>g("DWM helper exited: "+t))}catch(t){g("DWM helper launch exception: "+t.stack)}})'''
 
 
+BILI_ACCOUNT_STATUS = r'''function bilidownReplyAccount(sender,channel){
+  const request=r.net.request({
+    method:"GET",url:"https://api.bilibili.com/x/web-interface/nav",
+    session:r.session.defaultSession,useSessionCookies:true,redirect:"error"
+  });
+  let finished=false;
+  const reply=status=>{
+    if(finished)return;
+    finished=true;
+    clearTimeout(timer);
+    if(!sender.isDestroyed||!sender.isDestroyed())sender.send(channel,status);
+  };
+  const fail=error=>reply({ok:false,error});
+  const timer=setTimeout(()=>{
+    fail("B 站账号接口响应超时，请检查网络后重试。");
+    request.abort();
+  },10000);
+  request.setHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+  request.setHeader("Referer","https://www.bilibili.com/");
+  request.on("response",response=>{
+    if(response.statusCode!==200){
+      fail("B 站账号接口返回 HTTP "+response.statusCode+"，请稍后重试。");
+      request.abort();
+      return;
+    }
+    const chunks=[];
+    response.on("data",chunk=>chunks.push(chunk));
+    response.on("error",()=>fail("读取 B 站账号响应失败，请重试。"));
+    response.on("end",()=>{
+      try{
+        const result=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if(result.code===-101){reply({ok:true,isLogin:false});return;}
+        if(result.code!==0||typeof result.data?.isLogin!=="boolean"){
+          fail("B 站账号接口暂不可用，请稍后重试。");
+          return;
+        }
+        const data=result.data;
+        reply({ok:true,isLogin:data.isLogin,uname:data.uname||"",mid:data.mid||"",vip:Number(data.vipStatus)===1});
+      }catch{fail("B 站账号接口返回了无法读取的数据，请稍后重试。");}
+    });
+  });
+  request.on("error",()=>fail("无法连接 B 站账号接口，请检查网络后重试。"));
+  request.end();
+}
+'''
+
+
+def patch_bili_account_background(background: str) -> str:
+    start = background.index("function bilidownReplyAccount(sender,channel){")
+    end = background.index("const bilidownCookieNames", start)
+    return background[:start] + BILI_ACCOUNT_STATUS + background[end:]
+
+
+def patch_bili_account_settings(html: str) -> str:
+    if 'id="browser-manual-login"' in html:
+        return html
+    button = '<button id="open-extension-folder" class="text-button">打开扩展目录</button>'
+    if html.count(button) != 1:
+        raise RuntimeError("Could not find the RushB browser extension action")
+    html = html.replace(
+        "请先在系统默认浏览器登录 B 站并加载随程序提供的扩展；点击下方按钮后会在该浏览器打开本地导入页。",
+        "在默认 Edge 或 Chrome 的当前配置中登录 B 站，并在扩展管理页加载 RushB 登录桥接。",
+        1,
+    )
+    return html.replace(
+        button,
+        button + '\n            <button id="browser-manual-login" class="text-button">直接扫码登录</button>',
+        1,
+    )
+
+
 def find_entry(tree: dict, path: str) -> dict:
     node = tree
     parts = path.split("/")
@@ -253,6 +344,145 @@ def add_or_replace_entry(tree: dict, path: str, size: int, offset: int) -> None:
     for part in parts[:-1]:
         node = node.setdefault("files", {}).setdefault(part, {"files": {}})
     node.setdefault("files", {})[parts[-1]] = {"size": size, "offset": str(offset)}
+
+
+def patch_engine_background(background: str) -> str:
+    if 'require("./rushb-engine.js")' in background:
+        return background
+    start_marker = 'async function C(e=!1){let t=c.join(__dirname,"..","bin","aria2c.conf");'
+    end_marker = 'r.protocol.registerSchemesAsPrivileged('
+    start = background.find(start_marker)
+    end = background.find(end_marker, start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not find the original aria2 startup function")
+    replacement = '''const rushbEngine=require("./rushb-engine.js")({app:r.app,portfinder:d,binDirectory:c.resolve(__dirname,"..","bin"),onPort:port=>{g=port;if(E&&!E.isDestroyed())E.webContents.send("Aria2Port",port)},onChild:child=>{y=child},onUnavailable:()=>{if(E&&!E.isDestroyed())E.webContents.send("aria2-exit")}});async function C(restart=false){const ready=await rushbEngine.ensure();if(restart&&E&&!E.isDestroyed())E.webContents.send("aria2-restart-status",ready,ready?null:{error:"下载引擎启动失败，请查看 RushB 用户数据目录中的 logs/engine.log"});return ready}'''
+    return background[:start] + replacement + background[end:]
+
+
+DOUYIN_MAIN = r'''const rushbDouyinDownload=require("./rushb-douyin.js")({BrowserWindow:r.BrowserWindow,session:r.session,net:r.net});let rushbDouyinBusy=false;r.ipcMain.handle("rushb:douyin-download",async(event,payload)=>{if(!E||E.isDestroyed()||event.sender!==E.webContents)throw new Error("无效的下载请求来源");if(!payload||typeof payload!=="object"||Array.isArray(payload))throw new Error("无效的下载请求");const{id,url,folder}=payload;if(typeof id!=="string"||!id.trim()||id.length>128||/[\x00-\x1f\x7f]/.test(id))throw new Error("无效的下载任务编号");if(typeof url!=="string"||!url.trim()||url.length>8192||/[\x00-\x1f\x7f]/.test(url))throw new Error("无效的视频链接");if(typeof folder!=="string"||!folder.trim()||folder.length>32767||folder.includes("\0")||!c.isAbsolute(folder))throw new Error("无效的保存位置");if(rushbDouyinBusy)throw new Error("已有抖音任务正在下载，请稍后重试");rushbDouyinBusy=true;try{const result=await rushbDouyinDownload({url,folder,onUpdate:progress=>{if(!event.sender.isDestroyed())event.sender.send("rushb:douyin-progress",id,progress)}});if(!result||typeof result.title!=="string"||typeof result.path!=="string")throw new Error("下载引擎未返回完整的文件信息");return{id,title:result.title,path:result.path}}finally{rushbDouyinBusy=false}});'''
+
+
+def patch_douyin_background(background: str) -> str:
+    # Keep all existing entry, account, acrylic and aria2 patches intact.
+    if 'r.ipcMain.handle("rushb:douyin-download"' in background:
+        return background
+    marker = 'r.ipcMain.on("clearCookie",'
+    if marker not in background:
+        raise RuntimeError("Could not find the Douyin IPC insertion point")
+    return background.replace(marker, "void 0;" + DOUYIN_MAIN + marker, 1)
+
+
+YOUTUBE_MAIN = r'''const rushbYouTubeDownload=require("./rushb-youtube.js")({toolsDirectory:c.resolve(__dirname,"..","bin","youtube"),ffmpegLocation:c.resolve(__dirname,"..","bin","ffmpeg.exe")});let rushbYouTubeBusy=false;r.ipcMain.handle("rushb:youtube-download",async(event,payload)=>{if(!E||E.isDestroyed()||event.sender!==E.webContents)throw new Error("无效的下载请求来源");if(!payload||typeof payload!=="object"||Array.isArray(payload))throw new Error("无效的下载请求");const{id,url,folder}=payload;if(typeof id!=="string"||!id.trim()||id.length>128||/[\x00-\x1f\x7f]/.test(id))throw new Error("无效的下载任务编号");if(typeof url!=="string"||!url.trim()||url.length>8192||/[\x00-\x1f\x7f]/.test(url))throw new Error("无效的视频链接");if(typeof folder!=="string"||!folder.trim()||folder.length>32767||folder.includes("\0")||!c.isAbsolute(folder))throw new Error("无效的保存位置");if(rushbYouTubeBusy)throw new Error("已有 YouTube 任务正在下载，请稍后重试");rushbYouTubeBusy=true;try{const result=await rushbYouTubeDownload({url,folder,onUpdate:progress=>{if(!event.sender.isDestroyed())event.sender.send("rushb:youtube-progress",id,progress)}});if(!result||typeof result.title!=="string"||typeof result.path!=="string")throw new Error("下载引擎未返回完整的文件信息");return{id,title:result.title,path:result.path}}finally{rushbYouTubeBusy=false}});'''
+
+
+def patch_youtube_background(background: str) -> str:
+    # Add YouTube IPC without changing existing Bilibili or Douyin handlers.
+    if 'r.ipcMain.handle("rushb:youtube-download"' in background:
+        return background
+    marker = 'r.ipcMain.on("clearCookie",'
+    if marker not in background:
+        raise RuntimeError("Could not find the YouTube IPC insertion point")
+    # The original IPC handlers can be joined by commas; end that expression.
+    return background.replace(marker, "void 0;" + YOUTUBE_MAIN + marker, 1)
+
+
+def patch_package_publisher(raw: bytes) -> bytes:
+    package = json.loads(raw)
+    upstream_author = package.get("author")
+    if upstream_author and upstream_author != PUBLISHER_ID:
+        contributors = package.setdefault("contributors", [])
+        if upstream_author not in contributors:
+            contributors.append(upstream_author)
+    package["author"] = PUBLISHER_ID
+    package["publisher"] = PUBLISHER_ID
+    package["name"] = "rushb"
+    package["productName"] = "RushB"
+    return (json.dumps(package, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+def patch_windows_app_id(background: str) -> str:
+    # Set the taskbar identity before the main window is created.
+    setting = f'if(process.platform==="win32")r.app.setAppUserModelId({json.dumps(WINDOWS_APP_ID)});'
+    if setting in background:
+        return background
+    anchor = 'const m=r.app.requestSingleInstanceLock();'
+    if background.count(anchor) != 1:
+        raise RuntimeError("Could not find the RushB shell identity insertion point")
+    return background.replace(anchor, setting + anchor, 1)
+
+
+def patch_publisher_label(html: str) -> str:
+    label = f'发布者 <strong>{PUBLISHER_ID}</strong>'
+    if label in html:
+        return html
+    pattern = r'(<p class="about-lead">非官方个人改版)(?=\s|<)'
+    result, count = re.subn(pattern, rf'\1 <span>·</span> {label}', html, count=1)
+    if count != 1:
+        raise RuntimeError("Could not find the RushB software statement author label")
+    return result
+
+
+COMPONENTS_MAIN = '''const rushbComponents = require("./rushb-components-bridge.js")({
+  ipcMain: r.ipcMain,
+  net: r.net,
+  binDirectory: c.resolve(__dirname, "..", "bin"),
+  getMainWindow: () => E,
+  getAria2: () => y && !y.killed && y.exitCode === null ? {port: g} : null,
+  isYouTubeBusy: () => rushbYouTubeBusy
+});'''
+
+
+def patch_components_background(background: str) -> str:
+    if 'require("./rushb-components-bridge.js")' in background:
+        return background
+    ipc_marker = 'r.ipcMain.on("clearCookie",'
+    youtube_marker = 'if(rushbYouTubeBusy)throw new Error('
+    if ipc_marker not in background or youtube_marker not in background:
+        raise RuntimeError("Could not find the download component hooks")
+    guard = 'if(rushbComponents.isUpdating())throw new Error("下载组件正在更新，请稍后重试。");'
+    background = background.replace(youtube_marker, guard + youtube_marker, 1)
+    return background.replace(ipc_marker, "void 0;" + COMPONENTS_MAIN + ipc_marker, 1)
+
+
+def patch_components_settings(html: str) -> str:
+    if 'id="components-settings"' in html:
+        return html
+    settings = re.search(r'<main id="settings-view"(?:\s[^>]*)?>.*?(?=</main>)', html, re.DOTALL)
+    if not settings or html.count("</head>") != 1:
+        raise RuntimeError("Could not find the RushB settings layout")
+    section = (PROJECT_ROOT / "src" / "components-section.html").read_text(encoding="utf-8")
+    insert = settings.end()
+    html = html[:insert].rstrip() + "\n" + section.rstrip() + "\n    " + html[insert:]
+    assets = ('  <link href="./assets/css/rushb-components-ui.css" rel="stylesheet">\n'
+              '  <script defer src="./assets/js/rushb-components-ui.js"></script>\n')
+    return html.replace("</head>", assets + "</head>", 1)
+
+
+def component_resources() -> dict[str, bytes]:
+    return {name: (PROJECT_ROOT / "src" / source).read_bytes() for name, source in COMPONENT_RESOURCES.items()}
+
+
+def patch_favicon(html: str) -> str:
+    if 'id="rushb-favicon"' in html:
+        return html
+    if html.count("</head>") != 1:
+        raise RuntimeError("Could not find the RushB page header")
+    return html.replace("</head>", '  <link id="rushb-favicon" rel="icon" href="./logo.ico">\n</head>', 1)
+
+
+def patch_legacy_logo(raw: bytes) -> bytes:
+    """Keep the supplied renderer while replacing the upstream app logo in its store."""
+    text = raw.decode("utf-8")
+    location = re.search(r'logo:Object\.freeze\(([A-Za-z_$][\w$]*)\)', text)
+    if not location:
+        raise RuntimeError("Could not find the original app logo declaration")
+    variable = re.escape(location.group(1))
+    expression = rf'(?<![\w$])({variable}=")data:image/(?:png|webp);base64,[A-Za-z0-9+/=]+(?=")'
+    payload = base64.b64encode(APP_LOGO_PNG.read_bytes()).decode("ascii")
+    result, count = re.subn(expression, lambda match: match.group(1) + "data:image/png;base64," + payload, text)
+    if count != 1:
+        raise RuntimeError("Could not identify exactly one original app logo")
+    return result.encode("utf-8")
 
 
 def patch_asar() -> None:
@@ -279,6 +509,7 @@ def patch_asar() -> None:
     if protocol_call in background:
         background = background.replace(protocol_call, "void 0;", 1)
     background = background.replace('r.app.setName("Bilidown")', 'r.app.setName("RushB")', 1)
+    background = patch_windows_app_id(background)
     background = background.replace('v.setToolTip("Bilidown")', 'v.setToolTip("RushB（B站视频下载器）")', 1)
     window_marker = 'center:!0,frame:!1,icon:c.join(__dirname,"logo.ico")'
     if window_marker not in background:
@@ -296,11 +527,16 @@ def patch_asar() -> None:
         BACKDROP_READY,
         1,
     )
+    load_url_marker = 'await E.loadURL(\"app://./index.html\")'
+    if load_url_marker not in background:
+        raise RuntimeError("Could not find the app entry URL")
+    background = background.replace(load_url_marker, 'await E.loadURL(\"app://./index-dialog-fix.html\")', 1)
     ipc_marker = 'r.ipcMain.on("clearCookie",'
     if ipc_marker not in background:
         raise RuntimeError("Could not find the RushB IPC insertion point")
     background = background.replace(ipc_marker, "void 0;" + BRIDGE_MAIN + ipc_marker, 1)
-
+    background = patch_bili_account_background(background)
+    background = patch_components_background(patch_youtube_background(patch_douyin_background(patch_engine_background(background))))
     appended = bytearray()
 
     def append_file(path: str, data: bytes) -> None:
@@ -308,10 +544,23 @@ def patch_asar() -> None:
         add_or_replace_entry(tree, path, len(data), offset)
         appended.extend(data)
 
-    append_file("index.html", INDEX_HTML.encode("utf-8"))
+    package = find_entry(tree, "package.json")
+    package_start = int(package["offset"])
+    append_file("package.json", patch_package_publisher(original_body[package_start:package_start + package["size"]]))
+    append_file("index-dialog-fix.html", patch_favicon(patch_components_settings(patch_publisher_label(INDEX_HTML))).encode("utf-8"))
+    original_renderer = find_entry(tree, LEGACY_RENDERER)
+    renderer_start = int(original_renderer["offset"])
+    append_file(LEGACY_RENDERER, patch_legacy_logo(original_body[renderer_start:renderer_start + original_renderer["size"]]))
+    append_file("logo.ico", APP_ICON.read_bytes())
     append_file("background.js", background.encode("utf-8"))
-    append_file("assets/js/rushb-ui.js", JS_SOURCE.read_bytes())
-    append_file("assets/css/rushb-ui.css", CSS_SOURCE.read_bytes())
+    append_file("rushb-engine.js", ENGINE_SOURCE.read_bytes())
+    append_file("rushb-douyin.js", DOUYIN_SOURCE.read_bytes())
+    append_file("rushb-youtube.js", YOUTUBE_SOURCE.read_bytes())
+    append_file("rushb-links.js", LINKS_SOURCE.read_bytes())
+    append_file("assets/js/rushb-ui-dialog-fix.js", JS_SOURCE.read_bytes())
+    append_file("assets/css/rushb-ui-dialog-fix.css", CSS_SOURCE.read_bytes())
+    for name, data in component_resources().items():
+        append_file(name, data)
 
     header = json.dumps(tree, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     header_size = len(header)
@@ -349,10 +598,34 @@ def copy_runtime() -> None:
     (OUTPUT / "Bilidown.exe").rename(OUTPUT / "RushB.exe")
 
 
+def copy_youtube_tools() -> None:
+    # Optional, fully offline input. An unset variable leaves installed tools alone.
+    if not YOUTUBE_TOOLS:
+        return
+    source = Path(YOUTUBE_TOOLS).expanduser().resolve()
+    required = [source / "yt-dlp.exe", source / "deno.exe"]
+    missing = [tool.name for tool in required if not tool.is_file()]
+    if missing:
+        raise RuntimeError("RUSHB_YOUTUBE_TOOLS is missing: " + ", ".join(missing))
+    notices = [
+        file for file in source.iterdir()
+        if file.is_file() and file.name.upper().startswith(
+            ("LICENSE", "LICENCE", "NOTICE", "THIRD_PARTY", "THIRD-PARTY", "COPYING")
+        )
+    ]
+    destination = OUTPUT / "resources" / "bin" / "youtube"
+    destination.mkdir(parents=True, exist_ok=True)
+    for file in required + notices:
+        target = destination / file.name
+        if file.resolve() != target.resolve():
+            shutil.copy2(file, target)
+
+
 def write_readme() -> None:
     readme = """# RushB（B站视频下载器）
 
 RushB 提供批量链接下载、系列视频选择、最高可用音视频画质自动选择、账号登录管理，以及下载任务与记录管理。
+支持 B 站、抖音和 YouTube；YouTube 本地工具放在 `resources/bin/youtube/`（`yt-dlp.exe`、`deno.exe`），构建时可通过 `RUSHB_YOUTUBE_TOOLS` 指定已有工具目录，未指定时保留现有工具，也可稍后手动放入。
 
 ## 使用
 
@@ -362,6 +635,7 @@ RushB 提供批量链接下载、系列视频选择、最高可用音视频画�
 4. 点击标题栏的小圆图标，可查看下载中、等待中、暂停任务的进度和速度、切换已下载记录、清理下载记录，并在面板顶部打开保存位置；清理记录不会删除本地视频文件。
 5. 右上角“设置”可查看账号状态、设置保存目录与最高可用画质 / 音质，并选择浏览器导入或 B 站扫码登录。
 6. 在“设置 → 软件声明”中查看项目来源、内容使用规范、登录数据处理方式和免责声明。
+7. 在设置底部的“下载组件”查看已装版本，检查并更新 yt-dlp、Deno 和 FFmpeg。aria2 由 RushB 安装包提供。
 
 ## 浏览器登录
 
@@ -378,6 +652,8 @@ python build_rushb.py
 默认产物写入 `dist/`；可通过 `RUSHB_OUTPUT` 指定输出目录。构建过程会复制本机 Bilidown 运行时并替换界面资源。
 
 ## 来源说明
+
+RushB 的发布者 ID 为 **Harry张**。
 
 RushB 基于 B 站 UP 主 **@王子周棋洛** 的 Bilidown 魔改，原项目已停止维护，现由 **@Harry张** 进行优化更新。
 原项目的公开源码状态及许可证范围尚未核实；本说明不代表原作者背书或对原项目代码授予额外许可。
@@ -399,8 +675,15 @@ def main() -> None:
         raise SystemExit("Set BILIDOWN_DIR to the Bilidown 1.2.7 installation folder before building.")
     if not ASAR.is_file():
         raise SystemExit(f"Could not find Bilidown app.asar: {ASAR}")
+    from patch_rushb_exe import patch_publisher
+    from patch_rushb_icon import patch_icon
+
     copy_runtime()
+    patch_publisher(OUTPUT / "RushB.exe", PUBLISHER_ID)
+    patch_icon(OUTPUT / "RushB.exe", APP_ICON)
+    copy_youtube_tools()
     patch_asar()
+    shutil.copy2(APP_ICON, OUTPUT / "resources" / "rushb-lightning.ico")
     write_readme()
     shutil.copy2(JS_SOURCE, OUTPUT / "rushb-ui.js")
     shutil.copy2(CSS_SOURCE, OUTPUT / "rushb-ui.css")
